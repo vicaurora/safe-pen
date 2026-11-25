@@ -1,0 +1,149 @@
+name: guardtest
+
+x-lab: &lab
+  image: guardtest-lab:latest
+  pull_policy: never
+  restart: "no"
+  cap_drop: [ALL]
+  cap_add: [NET_BIND_SERVICE, CHOWN, DAC_READ_SEARCH]
+  environment: &env
+    GT_UID: ${GT_UID:-0}
+    GT_GID: ${GT_GID:-0}
+  volumes:
+    - ${GT_RUN_DIR:?run "python3 safepen.py init" first}/config.json:/gt/config.json:ro
+    - ${GT_RUN_DIR}/logs:/gt/logs
+
+x-canary: &canary
+  <<: *lab
+  cap_add: [NET_BIND_SERVICE, NET_RAW, CHOWN, DAC_READ_SEARCH]
+  command: ["python", "canary.py"]
+
+services:
+  dns:
+    <<: *lab
+    command: ["python", "dns_server.py"]
+    networks:
+      lab: {ipv4_address: "${GT_IP_DNS}"}
+
+  target:
+    <<: *lab
+    command: ["python", "target_main.py"]
+    hostname: ${GT_TARGET_HOSTNAME:-web}
+    cap_add: [NET_BIND_SERVICE, NET_RAW, CHOWN, DAC_READ_SEARCH, SETUID, SETGID, KILL]
+    dns: ["${GT_IP_DNS}"]
+    extra_hosts: ["payments-db:${GT_PIVOT_PIVOT}"]
+    depends_on: [dns]
+    networks:
+      lab: {ipv4_address: "${GT_IP_TARGET}"}
+      payments: {ipv4_address: "${GT_PIVOT_TARGET}"}
+
+  canary-excluded:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: excluded, CANARY_IP: "${GT_IP_EXCLUDED}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_EXCLUDED}"}
+
+  canary-neighbor:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: neighbor, CANARY_IP: "${GT_IP_NEIGHBOR}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_NEIGHBOR}"}
+
+  canary-dev:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: dev, CANARY_IP: "${GT_IP_DEV}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_DEV}"}
+
+  canary-rebind:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: rebind, CANARY_IP: "${GT_IP_REBIND}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_REBIND}"}
+
+  canary-apex:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: apex, CANARY_IP: "${GT_IP_APEX}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_APEX}"}
+
+  canary-media:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: media, CANARY_IP: "${GT_IP_MEDIA}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_MEDIA}"}
+
+  canary-v6:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: v6, CANARY_IP: "${GT_IP_V6}", CANARY_IP6: "${GT_IP6_V6}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_V6}", ipv6_address: "${GT_IP6_V6}"}
+
+  canary-jump:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: jump, CANARY_IP: "${GT_IP_JUMP}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_JUMP}"}
+
+  canary-decoy:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: decoy, CANARY_IP: "${GT_IP_DECOY}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_DECOY}"}
+
+  canary-internal:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: internal, CANARY_IP: "${GT_IP_INTERNAL}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_INTERNAL}"}
+
+  canary-legacy:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: legacy, CANARY_IP: "${GT_IP_LEGACY}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_LEGACY}"}
+
+  canary-sink:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: sink, CANARY_IP: "${GT_IP_SINK}"}
+    networks:
+      lab: {ipv4_address: "${GT_IP_SINK}"}
+
+  # HTTP proxy for agents that run on the host (HTTP_PROXY=http://10.77.0.250:3128).
+  egress-proxy:
+    <<: *lab
+    command: ["python", "egress_proxy.py"]
+    dns: ["${GT_IP_DNS}"]
+    depends_on: [dns]
+    networks:
+      lab: {ipv4_address: 10.77.0.250}
+
+  # Only reachable from the target: a shell on the target is needed to pivot there.
+  canary-pivot:
+    <<: *canary
+    environment: {<<: *env, CANARY_ROLE: pivot, CANARY_IP: "${GT_PIVOT_PIVOT}"}
+    networks:
+      payments: {ipv4_address: "${GT_PIVOT_PIVOT}"}
+
+networks:
+  lab:
+    name: guardtest_lab
+    enable_ipv6: true
+    # Host interfaces allowed to reach the lab containers directly, for an agent behind a gateway
+    # that runs on the host (for example GT_TRUSTED_HOST_INTERFACES=spb0). Empty by default.
+    driver_opts:
+      com.docker.network.bridge.trusted_host_interfaces: "${GT_TRUSTED_HOST_INTERFACES:-}"
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+          ip_range: 10.77.0.128/25
+          gateway: 10.77.0.1
+        - subnet: "2001:db8:77::/64"
+          ip_range: "2001:db8:77::8000/113"
+          gateway: "2001:db8:77::1"
+  payments:
+    name: guardtest_payments
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.78.0.0/24
